@@ -1,0 +1,263 @@
+// lib/main.dart
+import 'dart:math';
+import 'package:flutter/material.dart';
+
+void main() => runApp(const FoodPlannerApp());
+
+class FoodPlannerApp extends StatelessWidget {
+  const FoodPlannerApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Food Planner',
+      theme: ThemeData(useMaterial3: true),
+      home: const FoodPlannerPage(),
+    );
+  }
+}
+
+class FoodPlannerPage extends StatefulWidget {
+  const FoodPlannerPage({super.key});
+
+  @override
+  State<FoodPlannerPage> createState() => _FoodPlannerPageState();
+}
+
+class _FoodPlannerPageState extends State<FoodPlannerPage> {
+  // Map<foodName, weekendOnly>
+  final Map<String, bool> food = {
+    'Pizza': true,
+    'Salad': false,
+    'Burgers': true,
+    'Pasta': false,
+  };
+
+  final _nameCtrl = TextEditingController();
+  final _daysCtrl = TextEditingController(text: '14');
+  bool _weekendOnly = false;
+
+  final _rand = Random();
+  List<String> _plan = [];
+
+  // Carries previous week's picks across Generate calls.
+  // Week selections from the *last* week of the last plan will be excluded
+  // from the *first* week of the next plan.
+  Set<String> _lastWeekCarry = {}; // NEW
+
+  // === Core logic ===
+
+  void addFood(String name, bool weekendOnly) {
+    if (name.trim().isEmpty) return;
+    setState(() {
+      food[name.trim()] = weekendOnly;
+    });
+  }
+
+  bool _isWeekend(int dayIndex) {
+    // 1-based: 1=Mon ... 6=Sat, 7=Sun
+    return (dayIndex % 7 == 6 || dayIndex % 7 == 0);
+  }
+
+  List<String> generatePlan(int days) {
+    final result = <String>[];
+
+    // Track per-week selections and the previous week's selections.
+    Set<String> currentWeekSelected = {};
+    Set<String> lastWeekSelected = {..._lastWeekCarry}; // start from carry
+
+    for (int day = 1; day <= days; day++) {
+      // Start of a new week (day 1, 8, 15, ...)
+      final isStartOfWeek = (day == 1) || ((day - 1) % 7 == 0);
+      if (isStartOfWeek && day != 1) {
+        // move current to last; reset current
+        lastWeekSelected = currentWeekSelected;
+        currentWeekSelected = {};
+      } else if (isStartOfWeek && day == 1) {
+        // first week of this generation excludes _lastWeekCarry (already in lastWeekSelected)
+      }
+
+      final isWeekend = _isWeekend(day);
+
+      // Eligible by weekday/weekend
+      final eligible = <String>[];
+      food.forEach((name, weekendOnly) {
+        if (!isWeekend || weekendOnly) {
+          eligible.add(name);
+        }
+      });
+
+      // Primary rule: no repeats in same week + exclude last week's choices.
+      final primaryCandidates = eligible
+          .where(
+            (n) =>
+                !currentWeekSelected.contains(n) &&
+                !lastWeekSelected.contains(n),
+          )
+          .toList();
+
+      String? chosen;
+      if (primaryCandidates.isNotEmpty) {
+        chosen = primaryCandidates[_rand.nextInt(primaryCandidates.length)];
+      } else {
+        // Fallback: keep the strict "no repeat within the same week",
+        // but allow items from last week if necessary.
+        final fallback = eligible
+            .where((n) => !currentWeekSelected.contains(n))
+            .toList();
+        if (fallback.isNotEmpty) {
+          chosen = fallback[_rand.nextInt(fallback.length)];
+        }
+      }
+
+      result.add(chosen ?? 'No suitable food found');
+      if (chosen != null) {
+        currentWeekSelected.add(chosen);
+      }
+    }
+
+    // Update carry so next Generate call excludes the last week we just produced.
+    // If the plan ended mid-week, we still carry that partial week (makes most sense).
+    _lastWeekCarry = {..._extractLastWeek(result)};
+
+    return result;
+  }
+
+  // Helper: get the last (partial or full) week's unique picks from a plan.
+  Set<String> _extractLastWeek(List<String> plan) {
+    if (plan.isEmpty) return {};
+    final startIndexOfLastWeek = ((plan.length - 1) ~/ 7) * 7; // 0-based
+    return plan
+        .sublist(startIndexOfLastWeek)
+        .where((s) => s != 'No suitable food found')
+        .toSet();
+  }
+
+  // === UI ===
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Food Planner')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: ListView(
+          children: [
+            const Text(
+              'Add Food',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Food name',
+                      hintText: 'e.g. Tacos',
+                    ),
+                    onSubmitted: (_) => _handleAdd(),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Checkbox(
+                  value: _weekendOnly,
+                  onChanged: (v) => setState(() => _weekendOnly = v ?? false),
+                ),
+                const Text('Weekend only'),
+                const SizedBox(width: 12),
+                ElevatedButton(onPressed: _handleAdd, child: const Text('Add')),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: food.entries.map((e) {
+                return Chip(
+                  label: Text('${e.key}${e.value ? " (weekend)" : ""}'),
+                  onDeleted: () => setState(() => food.remove(e.key)),
+                );
+              }).toList(),
+            ),
+            const Divider(height: 32),
+            const Text(
+              'Generate Plan',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            Row(
+              children: [
+                SizedBox(
+                  width: 120,
+                  child: TextField(
+                    controller: _daysCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Days'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ElevatedButton(
+                  onPressed: _handleGenerate,
+                  child: const Text('Generate'),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton(
+                  onPressed: _resetCarry,
+                  child: const Text('Reset week carry'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (_plan.isNotEmpty) ...[
+              const Text(
+                'Food plan:',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              for (int i = 0; i < _plan.length; i++)
+                Text('Day ${i + 1}: ${_plan[i]}'),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _handleAdd() {
+    addFood(_nameCtrl.text, _weekendOnly);
+    _nameCtrl.clear();
+  }
+
+  void _handleGenerate() {
+    final days = int.tryParse(_daysCtrl.text) ?? 0;
+    if (days <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a valid number of days.')),
+      );
+      return;
+    }
+    setState(() {
+      _plan = generatePlan(days);
+    });
+  }
+
+  void _resetCarry() {
+    setState(() {
+      _lastWeekCarry = {};
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Week carry cleared. Next plan will not exclude previous week.',
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _daysCtrl.dispose();
+    super.dispose();
+  }
+}
